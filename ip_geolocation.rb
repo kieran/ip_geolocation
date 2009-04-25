@@ -1,13 +1,28 @@
-module GeoQuery
+require 'ipaddr'
 
-  class Error < StandardError; end
-  class QueryTimeoutError < Error; end
-  class QueryInvalidError < Error; end
+class IPAddr
 
   require 'open-uri'
   require 'timeout'
 
-  @@ip_regex = /\A[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\Z/
+  class IPAddrTimeoutError < StandardError; end
+  class IPAddrInvalidError < StandardError; end
+
+  def geolocate(options={})
+    opts = {:timeout=>2}.merge(options)
+    @cache ||= {}
+    return @cache[self.to_s] if @cache.include?(self.to_s) # don't lookup twice for the same ip
+    Timeout.timeout(opts[:timeout]) do
+      res = open("http://geoip.wtanaka.com/cc/#{self.to_string}").read
+      cc = res.to_s.strip.downcase
+      @cache[self.to_s] ||= {:name=>@@iso_3166[cc],:code=>cc} if @@iso_3166.include?(cc)
+    end
+   rescue TimeoutError
+    raise IPAddrTimeoutError, "The IP lookup web service timed out"
+   rescue OpenURI::HTTPError => e
+    raise IPAddrInvalidError, "Resolving #{self} failed: #{e.message}"
+  end
+
   @@iso_3166 = {
     'af' => 'Afghanistan',
     'ax' => 'Aland Islands',
@@ -256,36 +271,4 @@ module GeoQuery
     'zm' => 'Zambia',
     'zw' => 'Zimbabwe' }
 
-  def self.resolve(arg,options={}) # ip, code, or name
-    opts = {:timeout=>2.to_f}.merge(options)
-    str = arg.to_s.strip
-    return self.lookup(str,opts[:timeout]) unless str !~ @@ip_regex
-    return {:code=>str.downcase,:name=>@@iso_3166[str.downcase]} if @@iso_3166.include?(str.downcase)
-    @@iso_3166.index(str) ? {:name=>str,:code=>@@iso_3166.index(str)} : nil
-  end
-
-  def self.lookup(ip_address,timeout)
-    Timeout.timeout(timeout) do
-      code = open("http://geoip.wtanaka.com/cc/#{ip_address}").read.to_s.strip.downcase
-      return @@iso_3166.include?(code) ? {:name=>@@iso_3166[code],:code=>code} : nil
-    end
-   rescue TimeoutError
-    raise QueryTimeoutError, "The address #{ip_address} timed out"
-   rescue OpenURI::HTTPError => e
-    raise QueryInvalidError, "The query of address #{ip_address} failed: #{e.message}"
-  end
-
 end
-
-=begin ## usage:
-
-  # happiness
-  puts GeoQuery.resolve('Canada')            #=> {:name=>'Canada',:code=>'ca'}
-  puts GeoQuery.resolve('CA')                #=> {:name=>'Canada',:code=>'ca'}
-  puts GeoQuery.resolve('76.10.170.223')     #=> {:name=>'Canada',:code=>'ca'}
-
-  # exceptions
-  puts GeoQuery.resolve('76.10.170.223',:timeout=>0.000001)     #=> QueryTimeoutError
-  puts GeoQuery.resolve('111.222.111.222')   #=> QueryInvalidError
-  
-=end
