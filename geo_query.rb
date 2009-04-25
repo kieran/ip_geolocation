@@ -7,8 +7,8 @@ module GeoQuery
   require 'open-uri'
   require 'timeout'
 
-  VALID_IP_PATTERN = /\A[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\Z/
-  CODES_TO_NAMES_MAP = {
+  @@ip_regex = /\A[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\Z/
+  @@iso_3166 = {
     'af' => 'Afghanistan',
     'ax' => 'Aland Islands',
     'al' => 'Albania',
@@ -255,29 +255,37 @@ module GeoQuery
     'ye' => 'Yemen',
     'zm' => 'Zambia',
     'zw' => 'Zimbabwe' }
-  VALID_CODES = CODES_TO_NAMES_MAP.keys
-  VALID_NAMES = CODES_TO_NAMES_MAP.values
-  NAMES_TO_CODES_MAP = CODES_TO_NAMES_MAP.inject({}) { |hsh, (code, name)| hsh.merge(name.downcase => code) }
 
-  def self.resolve(ip_address)
-    return if ip_address !~ VALID_IP_PATTERN
-    Timeout.timeout(2) do
-      response = open("http://geoip.wtanaka.com/cc/#{ip_address}").read
-      country_code = response.to_s.strip.downcase
-      VALID_CODES.include?(country_code) ? country_code : nil
+  def self.resolve(arg,options={}) # ip, code, or name
+    opts = {:timeout=>2.to_f}.merge(options)
+    str = arg.to_s.strip
+    return self.lookup(str,opts[:timeout]) unless str !~ @@ip_regex
+    return {:code=>str.downcase,:name=>@@iso_3166[str.downcase]} if @@iso_3166.include?(str.downcase)
+    @@iso_3166.index(str) ? {:name=>str,:code=>@@iso_3166.index(str)} : nil
+  end
+
+  def self.lookup(ip_address,timeout)
+    Timeout.timeout(timeout) do
+      code = open("http://geoip.wtanaka.com/cc/#{ip_address}").read.to_s.strip.downcase
+      return @@iso_3166.include?(code) ? {:name=>@@iso_3166[code],:code=>code} : nil
     end
-   rescue Timeout::TimeoutError
+   rescue TimeoutError
     raise QueryTimeoutError, "The address #{ip_address} timed out"
    rescue OpenURI::HTTPError => e
     raise QueryInvalidError, "The query of address #{ip_address} failed: #{e.message}"
   end
 
-  def self.name_to_code(country_name)
-    NAMES_TO_CODES_MAP[country_name.to_s.downcase]
-  end
-
-  def self.code_to_name(country_code)
-    CODES_TO_NAMES_MAP[country_code.to_s.downcase]
-  end
-
 end
+
+=begin ## usage:
+
+  # happiness
+  puts GeoQuery.resolve('Canada')            #=> {:name=>'Canada',:code=>'ca'}
+  puts GeoQuery.resolve('CA')                #=> {:name=>'Canada',:code=>'ca'}
+  puts GeoQuery.resolve('76.10.170.223')     #=> {:name=>'Canada',:code=>'ca'}
+
+  # exceptions
+  puts GeoQuery.resolve('76.10.170.223',:timeout=>0.000001)     #=> QueryTimeoutError
+  puts GeoQuery.resolve('111.222.111.222')   #=> QueryInvalidError
+  
+=end
